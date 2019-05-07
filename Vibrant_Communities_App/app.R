@@ -1,3 +1,4 @@
+#reading in libraries
 library(leaflet)
 library(stringi)
 library(readxl)
@@ -9,21 +10,23 @@ library(plotly)
 library(sp)
 library(shinydashboard)
 library(listviewer)
-#reading in functions for drawing graphics
-source('helpers.R')
 
-#data sources
+
+#data source
 
 opportunity <- read_excel("Opportunity Indicators.xlsx", skip =3)
 
+#getting rid of extraneous rows
 opportunity <- opportunity[1:(nrow(opportunity)-3),]
 
-
+#helper function to standardize vector data for composites/index
 standardize_data = function (v){
+  #only retaining vector elements that are not NA or - for calculations
   data_viable <- as.numeric(v[which(is.na(v)==0 & v!='-')])
   
   max_vector = max(data_viable)
   min_vector = min(data_viable)
+  #nested function
   standardize_action = function (d){
     
     point = as.numeric(d)
@@ -33,23 +36,38 @@ standardize_data = function (v){
     }
     return((point-min_vector)/(max_vector-min_vector))
   }
+  #apply nested function to each element of vector, and return
   sapply(v, standardize_action)
 }
 
 get_third = function(l){
   return(l[[3]])
 }
+
+
+
+#reading in GIS data
 sf = readOGR(dsn = ".//data", 
              layer = "cb_2017_42_tract_500k")
 
+#isolating county level IDs
 alleg_county_tract_ids = sf$TRACTCE[which(sf$COUNTYFP=='003')]
-
+#getting indexes for ordered county ids, least to greatest
 alleg_county_tract_ids = order(alleg_county_tract_ids)
 
 
+
+#VERY IMPORTANT, indicates which SDG is currently selected, updated by code on line 460
 ind_var = 'Opportunity Composite'
+#indicates which sub-indicator of SDG is currently selected, updated by vode on line 461
 sub_ind_var = "1"
+
+#indicates current sub-indicator choice list, used for x-axis labels on histogram
 hist_choice_list = vector()
+
+
+
+#UI Interface
 ui <- fluidPage(
    # Application title
    titlePanel(strong("Allegheny County Vibrant Communities")),
@@ -60,36 +78,38 @@ ui <- fluidPage(
                             p("Made with", a("Shiny", href = "http://shiny.rstudio.com"), "."),
         
                             verbatimTextOutput("Info"),
-        
+                            #select Opportunity SDG
                             selectInput("variable", h5("Sustainable Development Goal:"),
                                 c("Opportunity Index", "Poverty Level",
                                 "Education",
                                 'Economic Participation',
                                 'Industry & Infrastructure',
-                                'Housing')),
-        br(),
-        uiOutput('sub_inds'),
-        br(),
-        br(),
-
-        plotlyOutput('county_com_map', height = 300)
-      ),
-      
-      # Show a plot of the generated distribution
-      mainPanel(
-         leafletOutput('testmap', height = 640)
-      )
-   )
-  ),
-  tabPanel('Sustainability'),
-  tabPanel('Culture'),
-  tabPanel('Overall Vibrancy')
+                                'Housing Unaffordability')),
+                            br(),
+                            #select sub indicator, see server code
+                            uiOutput('sub_inds'), 
+                            br(), 
+                            br(),
+                            #interactive histogram for selected Vibrancy area, SDG, sub-ind
+                            plotlyOutput('county_com_map', height = 300)
+                            ),
+                         # Show a plot of the generated distribution
+                         mainPanel(
+                           #main map display
+                           leafletOutput('testmap', height = 640)
+                           )
+                         )
+                       ),
+              tabPanel('Sustainability'),
+              tabPanel('Culture'),
+              tabPanel('Overall Vibrancy')
   )
 )
 
 # Define server logic required to draw a histogram
 server <- function(input, output) {
-
+  
+  #code to render Vibrancy area, SDG, sub-indicator radio button options, update hist_choice_list
   output$sub_inds=renderUI({
     if(input$variable == "Opportunity Index"){
       choice_list = c( input$variable) 
@@ -116,31 +136,40 @@ server <- function(input, output) {
                        'Broadband Access Rate %')
       hist_choice_list <<- choice_list
     }
-    if(input$variable == 'Housing'){
+    if(input$variable == 'Housing Unaffordability'){
         choice_list = c(paste(input$variable, 'Composite'), 'Gross Rent as a % of Household Income')
         hist_choice_list <<- choice_list
         
     }
       
-  
+    #creates radio buttons for selected vibrancy area, sdg, sub-ind
     radioButtons("sub_ind_selected", label = h3("Sustainable Development Goal & Indicators"),
                  choiceNames = choice_list, 
                  choiceValues = seq(1, length(choice_list)), 
                  selected = 1)
   })
   
-  
+  #reactive function to get/calculate data for display, can be made to be less redunant
    data <- reactive({
      validate(
        need(input$sub_ind_selected, message=FALSE),
        need(input$variable, message = FALSE)
      )
+     
+     #extracting census tract number from opportunity data
+     tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
+                                       split = ' '), get_third),
+                       split = ',')
+     #spacers for hover text popup
+     lab_additions = " "
+     
       if(input$variable=="Opportunity Index"){
-        sub_inds_selected = input$sub_ind_selected
         
         fam_pov = standardize_data(opportunity$`% Family Poverty`)
         fem_pov = standardize_data(opportunity$`% Female Poverty`)
         hshld_pov = standardize_data(opportunity$`% Hshld Foodstamps`)
+        #reversing direction of negative/bad indicators so that higher values of goal composite mean better
+        #outcomes
         goal_1_composite = apply(cbind((1-fam_pov), (1-fem_pov), (1-hshld_pov)), 1, mean)
         
         pre_k = standardize_data(opportunity$`Percent of kids in Nursery school, preschool`)
@@ -162,19 +191,16 @@ server <- function(input, output) {
         data_used = as.numeric(apply(cbind(goal_1_composite, goal_4_composite, goal_8_composite,
                                 goal_9_composite, goal_11_composite), 1, mean))
         
-        tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                          split = ' '), get_third),
-                          split = ',')
-        lab_additions = " "
-      }
+         }
      if(input$variable=="Poverty Level"){
+       #indicates the index of choice within the choice list for selected sdg
        sub_inds_selected = input$sub_ind_selected
        
        if(1 %in% sub_inds_selected){
          fam_pov = standardize_data(opportunity$`% Family Poverty`)
          fem_pov = standardize_data(opportunity$`% Female Poverty`)
          hshld_pov = standardize_data(opportunity$`% Hshld Foodstamps`)
-         data_used = apply(cbind(fam_pov, fem_pov, hshld_pov), 1, mean)
+         data_used = apply(cbind(1-fam_pov, 1-fem_pov, 1-hshld_pov), 1, mean)
        }
        if(2 %in% sub_inds_selected){
          data_used = opportunity$`% Family Poverty`
@@ -185,10 +211,6 @@ server <- function(input, output) {
        if(4 %in% sub_inds_selected){
          data_used =  opportunity$`% Hshld Foodstamps`
        }
-       tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                         split = ' '), get_third),
-                         split = ',')
-       lab_additions = " "
      }
      if(input$variable=="Education"){
        sub_inds_selected = input$sub_ind_selected
@@ -205,11 +227,6 @@ server <- function(input, output) {
        if(3 %in% sub_inds_selected){
          data_used = 100 - opportunity$`Percent;  Population 25 years and over  9th to 12th grade, no diploma`
        }
-       tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                         split = ' '), get_third),
-                         split = ',')
-       lab_additions = " "
-       
      }
       if(input$variable=="Economic Participation"){
        sub_inds_selected = input$sub_ind_selected
@@ -217,7 +234,7 @@ server <- function(input, output) {
          if(1 %in% sub_inds_selected){
            youth_unemp = standardize_data(opportunity$`Unemployment rate; Estimate; AGE - 16 to 19 years`)
            k_12_complet_2 = standardize_data(opportunity$`Percent; Estimate; Percent high school graduate or higher`)
-           data_used = apply(cbind(youth_unemp, k_12_complet_2), 1, mean)
+           data_used = apply(cbind(1-youth_unemp, k_12_complet_2), 1, mean)
          }
          if(2 %in% sub_inds_selected){
            data_used = opportunity$`Unemployment rate; Estimate; AGE - 16 to 19 years` 
@@ -225,10 +242,6 @@ server <- function(input, output) {
          if(3 %in% sub_inds_selected){
            data_used = opportunity$`Percent; Estimate; Percent high school graduate or higher`
          }
-       tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                         split = ' '), get_third),
-                         split = ',')
-       lab_additions = " "
        
        }
      
@@ -246,52 +259,42 @@ server <- function(input, output) {
        if(3 %in% sub_inds_selected){
          data_used = opportunity$`Estimate; Has a computer: - With a broadband Internet subscription (Divided by Total Number of HH per Census Tract to find rate)`
        }
-       tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                         split = ' '), get_third),
-                         split = ',')
-       lab_additions = " "
-       
      }
      
      else{
-       if(input$variable == "Housing"){
+       if(input$variable == "Housing Unaffordability"){
          sub_inds_selected = input$sub_ind_selected
          if(1 %in% sub_inds_selected){
            data_used =  standardize_data(opportunity$`Percent; GROSS RENT AS A PERCENTAGE OF HOUSEHOLD INCOME  35.0 percent or more`)
             }
          if(2 %in% sub_inds_selected){
            data_used = opportunity$`Percent; GROSS RENT AS A PERCENTAGE OF HOUSEHOLD INCOME  35.0 percent or more` 
-          }
-
-         
-         tracts = strsplit(sapply(strsplit(opportunity$`Census Tract`, 
-                                           split = ' '), get_third),
-                           split = ',')
-         lab_additions = " "
-         
-       
+         }
        }
      }
 
     
      data_used_labels = as.numeric(data_used)
 
-
+    #text for hover label
      tract_labels <- sprintf(
        "<strong>Allegheny County Census Tract %s</strong><br/>%s %g",
        paste(tracts, ":", sep = ''), lab_additions, data_used_labels
      ) %>% lapply(htmltools::HTML)
      
+     #returning the data as a list
      return(list(as.numeric(data_used), tract_labels,tracts))
 
    })
    
    
-   
+   #reactive function to get breaks hich will be used to generate the palette and legend for map
    breaks <- reactive({
+     #getting first item of returned list from data()
      data_used <-data()[[1]]
       
      summ_used = summary(data_used)[c(1, 2, 3, 5, 6)]
+     #addressing special cases for highly skewed data, more can be added
      if(summ_used[1] == summ_used[2]){
        summ_used[2] = summ_used[1] + (summ_used[3]-summ_used[1])/2
      }
@@ -328,7 +331,7 @@ server <- function(input, output) {
        pal_used = "Greys"
      }
      
-     if(input$variable == "Housing"){
+     if(input$variable == "Housing Unaffordability"){
        pal_used = "YlOrRd"
      }
      
@@ -336,7 +339,7 @@ server <- function(input, output) {
      pal_used 
    })
    
-   
+   #returns percentile of data point within some data set
    data_percentile = function(x, data){
        
        paste(round(sum(data<x)/length(data), 2)*100, '%', sep = '')
@@ -345,16 +348,21 @@ server <- function(input, output) {
    
    
    output$testmap <- renderLeaflet(({
-     validate(
+     #need valus for input$variable and input$sub_ind_selected before proceeding
+     shiny::validate(
        need(input$variable, message=FALSE),
        need(input$sub_ind_selected, message=FALSE)
        )
+     #get data
      geo_data <- data()
-     
+     #get breaks
      bin_breaks <- breaks()
+     #get palette
      pal_used <- palettes_used()
+     # function to generate exact color scheme from bin_breaks and pal_used
      palette_used = colorBin(pal_used, domain = geo_data[[1]], bins = bin_breaks)
       
+     #building map, VERY IMPORTANT ordering drawing/coloring of census tracts by geoid, least to greatest
        m<- leaflet(sf[which(sf$COUNTYFP=='003')[alleg_county_tract_ids],]) %>%
        addTiles() %>%
        addPolygons(color = "#444444", fillColor = ~palette_used(geo_data[[1]]), 
@@ -372,6 +380,7 @@ server <- function(input, output) {
      
    }))
   
+   #reactive function to get layerid info from clicked polygon
    clicks <- reactive({
      if(is.null(input$testmap_shape_click$id)==0){
        strsplit(as.character(input$testmap_shape_click$id), split = ' ')[[1]]
@@ -380,7 +389,7 @@ server <- function(input, output) {
    
    
    
-   
+   #drawing interactive histogram
    output$county_com_map <- renderPlotly({
      validate(
        need(input$variable, message=FALSE),
@@ -396,7 +405,7 @@ server <- function(input, output) {
                                              length.out = 30))))
       
       click_parts <- clicks()
-
+      #if click has been made and choices match up 
       if(is.null(click_parts)==0 & input$sub_ind_selected==sub_ind_var & input$variable == ind_var ){
     
         a<-  ggplot()+
@@ -423,6 +432,7 @@ server <- function(input, output) {
         
         a <-layout(a, xaxis = list(fixedrange = TRUE),
                    yaxis = list(fixedrange = TRUE))
+        
         if(is.na(as.numeric(click_parts[[1]]))){
              b<- ggplot() +
                geom_text(aes(x = 50, y = 50, label = "NO DATA AVAILABLE"), col = 'red')+
